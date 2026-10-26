@@ -65,12 +65,6 @@ lib/
 Teknik Informatika, Universitas Pamulang
 ican3192@gmail.com
 
-## Attribution
-
-Naci Brain is based on the open source project **Brain Burn** by
-[ali-hasssan](https://github.com/ali-hasssan/Brain-Burn), released under the
-MIT License.
-
 ## License
 
 MIT License. See [LICENSE](LICENSE). The copyright notice of the original
