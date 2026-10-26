@@ -1,5 +1,5 @@
 name: naci_brain
-description: Naci Brain — a fast-paced neon math puzzle game. Solve, combo, dominate. Developed by Muhammad Ikhsan; based on Brain Burn (MIT).
+description: Naci Brain — a fast-paced math puzzle game. Solve, combo, climb. Developed by Muhammad Ikhsan; based on Brain Burn (MIT).
 publish_to: 'none'
 version: 1.0.0+1
 
@@ -11,11 +11,6 @@ dependencies:
     sdk: flutter
   provider: ^6.1.1
   shared_preferences: ^2.2.2
-  flutter_animate: ^4.5.0
-  google_fonts: ^6.1.0
-  confetti: ^0.7.0
-  uuid: ^4.3.3
-  equatable: ^2.0.5
 
 dev_dependencies:
   flutter_test:
@@ -27,7 +22,7 @@ flutter_launcher_icons:
   android: true
   ios: true
   image_path: "assets/images/icon.png"
-  adaptive_icon_background: "#1B1464"
+  adaptive_icon_background: "#0E1013"
   adaptive_icon_foreground: "assets/images/icon.png"
 
 flutter:

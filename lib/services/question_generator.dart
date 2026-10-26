@@ -4,18 +4,18 @@ import '../models/question.dart';
 import '../utils/constants.dart';
 
 class QuestionGenerator {
+  QuestionGenerator._();
+
   static final Random _rng = Random();
-  static int _counter = 0;
 
   // ─── Public API ────────────────────────────────────────────────────────────
 
   static Question generate({required Difficulty difficulty}) {
-    _counter++;
     final type = _pickType(difficulty);
     return _build(type, difficulty);
   }
 
-  /// Returns display label for an option (handles True/False mapping)
+  /// Display label for an option (handles True/False mapping).
   static String optionLabel(Question question, int index) {
     if (question.type == QuestionType.trueFalse) {
       return question.options[index] == 1 ? 'TRUE' : 'FALSE';
@@ -63,11 +63,11 @@ class QuestionGenerator {
   }
 
   static QuestionType _weighted(List<(QuestionType, int)> weights) {
-    final total = weights.fold(0, (s, w) => s + w.$2);
+    final total = weights.fold(0, (sum, w) => sum + w.$2);
     int roll = _rng.nextInt(total);
-    for (final (type, weight) in weights) {
-      roll -= weight;
-      if (roll < 0) return type;
+    for (final w in weights) {
+      roll -= w.$2;
+      if (roll < 0) return w.$1;
     }
     return weights.last.$1;
   }
@@ -76,25 +76,37 @@ class QuestionGenerator {
 
   static Question _build(QuestionType type, Difficulty d) {
     switch (type) {
-      case QuestionType.addition:      return _addition(d);
-      case QuestionType.subtraction:   return _subtraction(d);
-      case QuestionType.multiplication: return _multiplication(d);
-      case QuestionType.division:      return _division(d);
-      case QuestionType.missingNumber: return _missingNumber(d);
-      case QuestionType.trueFalse:     return _trueFalse(d);
-      case QuestionType.sequence:      return _sequence(d);
+      case QuestionType.addition:
+        return _addition(d);
+      case QuestionType.subtraction:
+        return _subtraction(d);
+      case QuestionType.multiplication:
+        return _multiplication(d);
+      case QuestionType.division:
+        return _division(d);
+      case QuestionType.missingNumber:
+        return _missingNumber(d);
+      case QuestionType.trueFalse:
+        return _trueFalse(d);
+      case QuestionType.sequence:
+        return _sequence(d);
     }
   }
 
   static int _maxNum(Difficulty d) {
     switch (d) {
-      case Difficulty.easy:    return 20;
-      case Difficulty.medium:  return 50;
-      case Difficulty.hard:    return 100;
-      case Difficulty.extreme: return 200;
+      case Difficulty.easy:
+        return 20;
+      case Difficulty.medium:
+        return 50;
+      case Difficulty.hard:
+        return 100;
+      case Difficulty.extreme:
+        return 200;
     }
   }
 
+  /// Random int in 1..max (inclusive).
   static int _r(int max) => _rng.nextInt(max) + 1;
 
   static Question _addition(Difficulty d) {
@@ -103,7 +115,7 @@ class QuestionGenerator {
     return Question(
       questionText: '$a + $b = ?',
       correctAnswer: a + b,
-      options: _opts(a + b, max * 2),
+      options: _opts(a + b),
       type: QuestionType.addition,
       difficulty: d,
     );
@@ -112,23 +124,33 @@ class QuestionGenerator {
   static Question _subtraction(Difficulty d) {
     final max = _maxNum(d);
     int a = _r(max), b = _r(max);
-    if (b > a) { final t = a; a = b; b = t; }
+    if (b > a) {
+      final t = a;
+      a = b;
+      b = t;
+    }
     return Question(
       questionText: '$a − $b = ?',
       correctAnswer: a - b,
-      options: _opts(a - b, max),
+      options: _opts(a - b),
       type: QuestionType.subtraction,
       difficulty: d,
     );
   }
 
   static Question _multiplication(Difficulty d) {
-    final maxF = d == Difficulty.easy ? 5 : d == Difficulty.medium ? 10 : d == Difficulty.hard ? 12 : 20;
+    final maxF = d == Difficulty.easy
+        ? 5
+        : d == Difficulty.medium
+            ? 10
+            : d == Difficulty.hard
+                ? 12
+                : 20;
     final a = _r(maxF) + 1, b = _r(maxF) + 1;
     return Question(
       questionText: '$a × $b = ?',
       correctAnswer: a * b,
-      options: _opts(a * b, maxF * maxF),
+      options: _opts(a * b),
       type: QuestionType.multiplication,
       difficulty: d,
     );
@@ -141,7 +163,7 @@ class QuestionGenerator {
     return Question(
       questionText: '${b * ans} ÷ $b = ?',
       correctAnswer: ans,
-      options: _opts(ans, maxF),
+      options: _opts(ans),
       type: QuestionType.division,
       difficulty: d,
     );
@@ -151,24 +173,22 @@ class QuestionGenerator {
     final max = _maxNum(d);
     final a = _r(max), b = _r(max);
     final sum = a + b;
-    // Randomly hide either a or b
     if (_rng.nextBool()) {
       return Question(
         questionText: '? + $b = $sum',
         correctAnswer: a,
-        options: _opts(a, max),
-        type: QuestionType.missingNumber,
-        difficulty: d,
-      );
-    } else {
-      return Question(
-        questionText: '$a + ? = $sum',
-        correctAnswer: b,
-        options: _opts(b, max),
+        options: _opts(a),
         type: QuestionType.missingNumber,
         difficulty: d,
       );
     }
+    return Question(
+      questionText: '$a + ? = $sum',
+      correctAnswer: b,
+      options: _opts(b),
+      type: QuestionType.missingNumber,
+      difficulty: d,
+    );
   }
 
   static Question _trueFalse(Difficulty d) {
@@ -176,7 +196,7 @@ class QuestionGenerator {
     final a = _r(max), b = _r(max);
     final real = a + b;
     final isCorrect = _rng.nextBool();
-    final shown = isCorrect ? real : real + (_rng.nextInt(5) + 1) * (_rng.nextBool() ? 1 : -1);
+    final shown = isCorrect ? real : _wrongSum(real);
     return Question(
       questionText: '$a + $b = $shown',
       correctAnswer: isCorrect ? 1 : 0,
@@ -186,21 +206,32 @@ class QuestionGenerator {
     );
   }
 
+  /// A plausible but wrong sum: never equal to [real] and never below 1.
+  static int _wrongSum(int real) {
+    int v = real;
+    while (v == real || v < 1) {
+      v = real + (_rng.nextInt(5) + 1) * (_rng.nextBool() ? 1 : -1);
+    }
+    return v;
+  }
+
   static Question _sequence(Difficulty d) {
-    final step = _r(d == Difficulty.easy ? 4 : d == Difficulty.medium ? 8 : 15);
+    final step =
+        _r(d == Difficulty.easy ? 4 : d == Difficulty.medium ? 8 : 15);
     final start = _r(20);
-    // Show 4 terms, hide one in the middle
     final terms = List.generate(5, (i) => start + i * step);
-    final hideIdx = _rng.nextInt(3) + 1; // hide index 1, 2, or 3
+    final hideIdx = _rng.nextInt(3) + 1; // hide index 1, 2 or 3
     final correct = terms[hideIdx];
-    final display = terms.asMap().entries
+    final display = terms
+        .asMap()
+        .entries
         .map((e) => e.key == hideIdx ? '?' : '${e.value}')
         .take(4)
         .join(', ');
     return Question(
       questionText: '$display, ...',
       correctAnswer: correct,
-      options: _opts(correct, start + 5 * step),
+      options: _opts(correct),
       type: QuestionType.sequence,
       difficulty: d,
     );
@@ -208,27 +239,25 @@ class QuestionGenerator {
 
   // ─── Options Generator ─────────────────────────────────────────────────────
 
-  static List<int> _opts(int correct, int maxVal) {
+  /// Builds 4 distinct options (the correct one plus 3 near-miss distractors),
+  /// shuffled.
+  static List<int> _opts(int correct) {
     final set = <int>{correct};
     int attempts = 0;
-    final upper = maxVal > correct + 20 ? maxVal : correct + 20;
     while (set.length < 4 && attempts < 60) {
       attempts++;
-      final strategy = _rng.nextInt(3);
-      int candidate;
-      if (strategy == 0) {
-        candidate = correct + (_rng.nextInt(5) + 1) * (_rng.nextBool() ? 1 : -1);
-      } else if (strategy == 1) {
-        candidate = correct + (_rng.nextInt(15) + 5) * (_rng.nextBool() ? 1 : -1);
-      } else {
-        candidate = 1 + _rng.nextInt(upper);
-      }
+      final close = _rng.nextBool();
+      final span = close ? 5 : 15;
+      final base = close ? 1 : 5;
+      final candidate =
+          correct + (_rng.nextInt(span) + base) * (_rng.nextBool() ? 1 : -1);
       if (candidate > 0 && candidate != correct) set.add(candidate);
     }
-    // Guaranteed fallback
+    // Guaranteed fallback so we always return 4 options.
     int off = 1;
-    while (set.length < 4) { set.add(correct + off++); }
-
+    while (set.length < 4) {
+      set.add(correct + off++);
+    }
     return set.toList()..shuffle(_rng);
   }
 }

@@ -1,176 +1,228 @@
 // lib/services/storage_service.dart
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../models/daily_challenge.dart';
 import '../models/question.dart';
 import '../utils/constants.dart';
 
-class StorageService {
-  static StorageService? _instance;
-  static SharedPreferences? _prefs;
+/// What changed after a finished game was saved.
+class GameOutcome {
+  final bool isNewHighScore;
+  final bool leveledUp;
+  final List<Achievement> newAchievements;
 
-  StorageService._();
+  const GameOutcome({
+    required this.isNewHighScore,
+    required this.leveledUp,
+    required this.newAchievements,
+  });
+}
 
-  static Future<StorageService> getInstance() async {
-    _instance ??= StorageService._();
-    _prefs ??= await SharedPreferences.getInstance();
-    return _instance!;
+/// Single source of truth for everything saved on the device.
+/// It is a ChangeNotifier, so screens that watch it refresh automatically.
+class StorageService extends ChangeNotifier {
+  StorageService._(this._prefs);
+
+  final SharedPreferences _prefs;
+
+  static Future<StorageService> create() async {
+    final prefs = await SharedPreferences.getInstance();
+    final service = StorageService._(prefs);
+    await service._touchLoginStreak();
+    return service;
   }
 
-  // ─── Coins & Gems ──────────────────────────────────────────────────────────
-  int get coins => _prefs?.getInt(StorageKeys.coins) ?? 0;
-  int get gems => _prefs?.getInt(StorageKeys.gems) ?? 0;
+  // ─── Currency, XP, level ───────────────────────────────────────────────────
+  int get coins => _prefs.getInt(StorageKeys.coins) ?? 0;
+  int get gems => _prefs.getInt(StorageKeys.gems) ?? 0;
+  int get xp => _prefs.getInt(StorageKeys.xp) ?? 0;
+  int get level => _prefs.getInt(StorageKeys.level) ?? 1;
+
+  double get xpProgress =>
+      (xp / GameConstants.xpPerLevel).clamp(0.0, 1.0).toDouble();
 
   Future<void> addCoins(int amount) async {
-    await _prefs?.setInt(StorageKeys.coins, coins + amount);
-  }
-
-  Future<void> spendCoins(int amount) async {
-    final current = coins;
-    if (current >= amount) {
-      await _prefs?.setInt(StorageKeys.coins, current - amount);
-    }
+    await _prefs.setInt(StorageKeys.coins, coins + amount);
+    notifyListeners();
   }
 
   Future<void> addGems(int amount) async {
-    await _prefs?.setInt(StorageKeys.gems, gems + amount);
+    await _prefs.setInt(StorageKeys.gems, gems + amount);
+    notifyListeners();
   }
 
-  // ─── XP & Level ────────────────────────────────────────────────────────────
-  int get xp => _prefs?.getInt(StorageKeys.xp) ?? 0;
-  int get level => _prefs?.getInt(StorageKeys.level) ?? 1;
-
-  Future<void> addXp(int amount) async {
-    var currentXp = xp + amount;
-    var currentLevel = level;
-
-    while (currentXp >= GameConstants.xpPerLevel) {
-      currentXp -= GameConstants.xpPerLevel;
-      currentLevel++;
+  /// Adds XP and returns true if the player gained at least one level.
+  Future<bool> _addXp(int amount) async {
+    int newXp = xp + amount;
+    int newLevel = level;
+    bool leveledUp = false;
+    while (newXp >= GameConstants.xpPerLevel) {
+      newXp -= GameConstants.xpPerLevel;
+      newLevel++;
+      leveledUp = true;
     }
-
-    await _prefs?.setInt(StorageKeys.xp, currentXp);
-    await _prefs?.setInt(StorageKeys.level, currentLevel);
+    await _prefs.setInt(StorageKeys.xp, newXp);
+    await _prefs.setInt(StorageKeys.level, newLevel);
+    return leveledUp;
   }
 
-  // ─── High Scores ───────────────────────────────────────────────────────────
+  // ─── High scores ───────────────────────────────────────────────────────────
   Map<String, int> get highScores {
-    final json = _prefs?.getString(StorageKeys.highScores);
-    if (json == null) return {};
-    return Map<String, int>.from(jsonDecode(json) as Map);
-  }
-
-  Future<bool> updateHighScore(GameMode mode, int score) async {
-    final scores = highScores;
-    final key = mode.name;
-    if ((scores[key] ?? 0) < score) {
-      scores[key] = score;
-      await _prefs?.setString(StorageKeys.highScores, jsonEncode(scores));
-      return true; // New high score!
+    final raw = _prefs.getString(StorageKeys.highScores);
+    if (raw == null) return {};
+    try {
+      return Map<String, int>.from(jsonDecode(raw) as Map);
+    } catch (_) {
+      return {};
     }
-    return false;
   }
 
   int getHighScore(GameMode mode) => highScores[mode.name] ?? 0;
 
   // ─── Statistics ────────────────────────────────────────────────────────────
-  int get totalGamesPlayed =>
-      _prefs?.getInt(StorageKeys.totalGamesPlayed) ?? 0;
+  int get totalGamesPlayed => _prefs.getInt(StorageKeys.totalGamesPlayed) ?? 0;
   int get totalCorrectAnswers =>
-      _prefs?.getInt(StorageKeys.totalCorrectAnswers) ?? 0;
+      _prefs.getInt(StorageKeys.totalCorrectAnswers) ?? 0;
+  int get totalAnswers => _prefs.getInt(StorageKeys.totalAnswers) ?? 0;
+  int get bestCombo => _prefs.getInt(StorageKeys.bestCombo) ?? 0;
 
-  Future<void> recordGame(GameResult result) async {
-    await _prefs?.setInt(
-      StorageKeys.totalGamesPlayed,
-      totalGamesPlayed + 1,
-    );
-    await _prefs?.setInt(
-      StorageKeys.totalCorrectAnswers,
-      totalCorrectAnswers + result.correctAnswers,
-    );
-    await updateHighScore(result.mode, result.score);
-    await addXp(result.score ~/ 10 + result.correctAnswers * 5);
-    await addCoins(result.score ~/ 20 + result.maxCombo);
-  }
+  /// Lifetime accuracy in percent, or null if nothing was answered yet.
+  double? get overallAccuracy =>
+      totalAnswers == 0 ? null : totalCorrectAnswers / totalAnswers * 100;
 
-  // ─── Login Streak ──────────────────────────────────────────────────────────
-  int get loginStreak => _prefs?.getInt(StorageKeys.loginStreak) ?? 0;
-
-  Future<int> checkAndUpdateLoginStreak() async {
-    final lastLogin = _prefs?.getString(StorageKeys.lastLoginDate);
-    final today = DateTime.now();
-    final todayStr = today.toIso8601String().substring(0, 10);
-
-    if (lastLogin == null) {
-      await _prefs?.setInt(StorageKeys.loginStreak, 1);
-      await _prefs?.setString(StorageKeys.lastLoginDate, todayStr);
-      return 1;
+  /// Saves a finished game: stats, high score, rewards and achievements.
+  Future<GameOutcome> recordGame(GameResult r) async {
+    final games = totalGamesPlayed + 1;
+    final correct = totalCorrectAnswers + r.correctAnswers;
+    await _prefs.setInt(StorageKeys.totalGamesPlayed, games);
+    await _prefs.setInt(StorageKeys.totalCorrectAnswers, correct);
+    await _prefs.setInt(StorageKeys.totalAnswers, totalAnswers + r.totalAnswers);
+    if (r.maxCombo > bestCombo) {
+      await _prefs.setInt(StorageKeys.bestCombo, r.maxCombo);
     }
 
-    final lastDate = DateTime.parse(lastLogin);
-    final diff = today.difference(lastDate).inDays;
-
-    if (diff == 0) return loginStreak; // Already logged in today
-    if (diff == 1) {
-      // Consecutive day
-      final newStreak = loginStreak + 1;
-      await _prefs?.setInt(StorageKeys.loginStreak, newStreak);
-      await _prefs?.setString(StorageKeys.lastLoginDate, todayStr);
-      return newStreak;
-    } else {
-      // Streak broken
-      await _prefs?.setInt(StorageKeys.loginStreak, 1);
-      await _prefs?.setString(StorageKeys.lastLoginDate, todayStr);
-      return 1;
+    final isNewHighScore = r.score > getHighScore(r.mode);
+    if (isNewHighScore) {
+      final scores = highScores;
+      scores[r.mode.name] = r.score;
+      await _prefs.setString(StorageKeys.highScores, jsonEncode(scores));
     }
+
+    await _prefs.setInt(StorageKeys.coins, coins + r.coinsEarned);
+    final leveledUp = await _addXp(r.xpEarned);
+
+    final already = unlockedAchievements;
+    final fresh = <Achievement>[];
+    for (final a in Achievement.all) {
+      if (already.contains(a.id)) continue;
+      if (_isEarned(a.id, r, correct)) fresh.add(a);
+    }
+    if (fresh.isNotEmpty) {
+      await _prefs.setStringList(
+        StorageKeys.achievements,
+        [...already, ...fresh.map((a) => a.id)],
+      );
+    }
+
+    notifyListeners();
+    return GameOutcome(
+      isNewHighScore: isNewHighScore,
+      leveledUp: leveledUp,
+      newAchievements: fresh,
+    );
   }
 
-  // ─── Daily Spin ────────────────────────────────────────────────────────────
-  bool get canSpinToday {
-    final lastSpin = _prefs?.getString(StorageKeys.dailySpinDate);
-    if (lastSpin == null) return true;
-    final today = DateTime.now().toIso8601String().substring(0, 10);
-    return lastSpin != today;
-  }
-
-  Future<void> markSpinUsed() async {
-    final today = DateTime.now().toIso8601String().substring(0, 10);
-    await _prefs?.setString(StorageKeys.dailySpinDate, today);
+  bool _isEarned(String id, GameResult r, int lifetimeCorrect) {
+    switch (id) {
+      case 'first_game':
+        return true;
+      case 'score_100':
+        return r.score >= 100;
+      case 'score_500':
+        return r.score >= 500;
+      case 'score_1000':
+        return r.score >= 1000;
+      case 'combo_5':
+        return r.maxCombo >= 5;
+      case 'combo_10':
+        return r.maxCombo >= 10;
+      case 'correct_100':
+        return lifetimeCorrect >= 100;
+      case 'correct_1000':
+        return lifetimeCorrect >= 1000;
+      case 'perfect_game':
+        return r.mode == GameMode.classic &&
+            r.wrongAnswers == 0 &&
+            r.correctAnswers >= 10;
+      case 'speed_demon':
+        return r.mode == GameMode.timeAttack && r.timeTakenSeconds < 30;
+    }
+    return false;
   }
 
   // ─── Achievements ──────────────────────────────────────────────────────────
-  Set<String> get unlockedAchievements {
-    final list = _prefs?.getStringList(StorageKeys.achievements) ?? [];
-    return list.toSet();
+  Set<String> get unlockedAchievements =>
+      (_prefs.getStringList(StorageKeys.achievements) ?? <String>[]).toSet();
+
+  // ─── Login streak ──────────────────────────────────────────────────────────
+  int get loginStreak => _prefs.getInt(StorageKeys.loginStreak) ?? 0;
+
+  Future<void> _touchLoginStreak() async {
+    final now = DateTime.now();
+    final today = DailyChallenge.dateKeyOf(now);
+    final last = _prefs.getString(StorageKeys.lastLoginDate);
+    if (last == today) return;
+
+    int streak = 1;
+    final lastDate = last == null ? null : DateTime.tryParse(last);
+    if (lastDate != null) {
+      // Compare calendar days only, so time of day and DST never matter.
+      final a = DateTime.utc(now.year, now.month, now.day);
+      final b = DateTime.utc(lastDate.year, lastDate.month, lastDate.day);
+      if (a.difference(b).inDays == 1) streak = loginStreak + 1;
+    }
+    await _prefs.setInt(StorageKeys.loginStreak, streak);
+    await _prefs.setString(StorageKeys.lastLoginDate, today);
   }
 
-  Future<bool> unlockAchievement(String id) async {
-    final unlocked = unlockedAchievements;
-    if (unlocked.contains(id)) return false;
-    unlocked.add(id);
-    await _prefs?.setStringList(
-      StorageKeys.achievements,
-      unlocked.toList(),
+  // ─── Daily spin ────────────────────────────────────────────────────────────
+  bool get canSpinToday =>
+      _prefs.getString(StorageKeys.dailySpinDate) !=
+      DailyChallenge.dateKeyOf(DateTime.now());
+
+  Future<void> markSpinUsed() async {
+    await _prefs.setString(
+      StorageKeys.dailySpinDate,
+      DailyChallenge.dateKeyOf(DateTime.now()),
     );
+    notifyListeners();
+  }
+
+  // ─── Daily challenges ──────────────────────────────────────────────────────
+  bool isChallengeClaimed(DailyChallenge c) =>
+      (_prefs.getStringList(StorageKeys.dailyClaimed) ?? <String>[])
+          .contains(c.id);
+
+  /// Pays out the reward once. Returns false if it was already claimed.
+  Future<bool> claimChallenge(DailyChallenge c) async {
+    if (isChallengeClaimed(c)) return false;
+    final kept = (_prefs.getStringList(StorageKeys.dailyClaimed) ?? <String>[])
+        .where((e) => e.startsWith(c.dateKey))
+        .toList()
+      ..add(c.id);
+    await _prefs.setStringList(StorageKeys.dailyClaimed, kept);
+    if (c.coins > 0) await _prefs.setInt(StorageKeys.coins, coins + c.coins);
+    if (c.gems > 0) await _prefs.setInt(StorageKeys.gems, gems + c.gems);
+    notifyListeners();
     return true;
   }
 
   // ─── Settings ──────────────────────────────────────────────────────────────
-  Map<String, dynamic> get settings {
-    final json = _prefs?.getString(StorageKeys.settings);
-    if (json == null) {
-      return {
-        'soundEnabled': true,
-        'hapticEnabled': true,
-        'notificationsEnabled': true,
-      };
-    }
-    return Map<String, dynamic>.from(jsonDecode(json) as Map);
-  }
+  bool get hapticsEnabled => _prefs.getBool(StorageKeys.haptics) ?? true;
 
-  Future<void> updateSettings(Map<String, dynamic> newSettings) async {
-    await _prefs?.setString(StorageKeys.settings, jsonEncode(newSettings));
+  Future<void> setHaptics(bool value) async {
+    await _prefs.setBool(StorageKeys.haptics, value);
+    notifyListeners();
   }
-
-  bool get soundEnabled => settings['soundEnabled'] as bool? ?? true;
-  bool get hapticEnabled => settings['hapticEnabled'] as bool? ?? true;
 }

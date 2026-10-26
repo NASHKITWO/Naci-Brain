@@ -30,6 +30,9 @@ jobs:
         run: flutter analyze
         continue-on-error: true
 
+      - name: Run tests
+        run: flutter test
+
       - name: Build release APK
         run: flutter build apk --release
 

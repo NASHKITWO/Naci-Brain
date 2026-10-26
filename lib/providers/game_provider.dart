@@ -1,21 +1,19 @@
+// lib/providers/game_provider.dart
 import 'dart:async';
 import 'dart:math';
-import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../utils/constants.dart';
+import 'package:flutter/foundation.dart';
 import '../models/question.dart';
 import '../services/question_generator.dart';
-
-// ─── Enums ────────────────────────────────────────────────────────────────────
+import '../utils/constants.dart';
 
 enum GameStatus { idle, countdown, playing, paused, gameOver }
 
 enum AnswerState { none, correct, wrong }
 
-// ─── Provider ─────────────────────────────────────────────────────────────────
-
 class GameProvider extends ChangeNotifier {
-  // ── Core State ──────────────────────────────────────────────────────────────
+  final Random _rng = Random();
+
+  // ── Core state ──────────────────────────────────────────────────────────────
   GameMode _mode = GameMode.classic;
   GameStatus _status = GameStatus.idle;
   AnswerState _lastAnswerState = AnswerState.none;
@@ -30,33 +28,33 @@ class GameProvider extends ChangeNotifier {
   int _questionsAnswered = 0;
   int _livesRemaining = GameConstants.maxMistakesEndless;
   int _timeRemaining = GameConstants.classicDuration;
+  int _elapsedSeconds = 0;
   int _countdownValue = 3;
   DateTime? _questionStartTime;
-
-  // ── Difficulty ──────────────────────────────────────────────────────────────
   Difficulty _difficulty = Difficulty.easy;
 
-  // ── Power-Up State ──────────────────────────────────────────────────────────
-  bool _isTimeFrozen = false;
-  bool _isDoubleScore = false;
-  bool _isSlowMotion = false;
+  // ── Power-ups (durations count down in play seconds, so pausing stops them) ─
+  int _freezeLeft = 0;
+  int _doubleLeft = 0;
+  int _slowLeft = 0;
+  bool _slowSkip = false;
   int _hintRemovedOptionIndex = -1;
 
-  final Map<PowerUpType, int> _powerUpInventory = {
-    PowerUpType.timeFreeze: 3,
-    PowerUpType.doubleScore: 3,
-    PowerUpType.hint: 3,
-    PowerUpType.autoSolve: 2,
-    PowerUpType.slowMotion: 3,
-  };
+  final Map<PowerUpType, int> _powerUpInventory = {};
 
-  // ── Timers ──────────────────────────────────────────────────────────────────
-  Timer? _gameTimer;
+  // ── Timers / flags ──────────────────────────────────────────────────────────
+  Timer? _ticker;
   Timer? _countdownTimer;
+  Timer? _advanceTimer;
   bool _transitioning = false;
+  bool _pendingAdvance = false;
+  bool _disposed = false;
 
-  // ── Getters ──────────────────────────────────────────────────────────────────
+  GameProvider() {
+    _fillInventory();
+  }
 
+  // ── Getters ─────────────────────────────────────────────────────────────────
   GameMode get mode => _mode;
   GameStatus get status => _status;
   AnswerState get lastAnswerState => _lastAnswerState;
@@ -71,35 +69,63 @@ class GameProvider extends ChangeNotifier {
   int get questionsAnswered => _questionsAnswered;
   int get livesRemaining => _livesRemaining;
   int get timeRemaining => _timeRemaining;
+  int get elapsedSeconds => _elapsedSeconds;
   int get countdownValue => _countdownValue;
-  bool get isTimeFrozen => _isTimeFrozen;
-  bool get isDoubleScore => _isDoubleScore;
-  bool get isSlowMotion => _isSlowMotion;
+  Difficulty get difficulty => _difficulty;
+
+  bool get isTimeFrozen => _freezeLeft > 0;
+  bool get isDoubleScore => _doubleLeft > 0;
+  bool get isSlowMotion => _slowLeft > 0;
   int get hintRemovedOptionIndex => _hintRemovedOptionIndex;
   Map<PowerUpType, int> get powerUpInventory =>
       Map.unmodifiable(_powerUpInventory);
-  Difficulty get difficulty => _difficulty;
 
   bool get isPlaying => _status == GameStatus.playing;
   bool get isGameOver => _status == GameStatus.gameOver;
 
-  double get timerPercent {
-    if (_mode == GameMode.zen) return 1.0;
-    return (_timeRemaining / GameConstants.classicDuration).clamp(0.0, 1.0);
-  }
+  double get timerPercent =>
+      (_timeRemaining / GameConstants.classicDuration).clamp(0.0, 1.0);
 
   double get timeAttackProgress =>
-      _questionsAnswered / GameConstants.timeAttackQuestions;
+      (_questionsAnswered / GameConstants.timeAttackQuestions).clamp(0.0, 1.0);
 
-  int get comboMultiplier => min(_combo, GameConstants.comboMaxMultiplier);
+  int get comboMultiplier => min(max(_combo, 1), GameConstants.comboMaxMultiplier);
 
-  Color get timerColor {
-    if (_timeRemaining <= 5) return AppColors.timerDanger;
-    if (_timeRemaining <= 15) return AppColors.timerWarning;
-    return AppColors.timerNormal;
+  bool isPowerUpActive(PowerUpType type) {
+    switch (type) {
+      case PowerUpType.timeFreeze:
+        return isTimeFrozen;
+      case PowerUpType.doubleScore:
+        return isDoubleScore;
+      case PowerUpType.slowMotion:
+        return isSlowMotion;
+      case PowerUpType.hint:
+      case PowerUpType.autoSolve:
+        return false;
+    }
   }
 
-  // ── Game Lifecycle ───────────────────────────────────────────────────────────
+  bool canUsePowerUp(PowerUpType type) {
+    final q = _currentQuestion;
+    if (_status != GameStatus.playing || _transitioning || q == null) {
+      return false;
+    }
+    if ((_powerUpInventory[type] ?? 0) <= 0) return false;
+    switch (type) {
+      case PowerUpType.timeFreeze:
+        return _mode.hasCountdown && _freezeLeft == 0;
+      case PowerUpType.slowMotion:
+        return _mode.hasCountdown && _slowLeft == 0;
+      case PowerUpType.doubleScore:
+        return _doubleLeft == 0;
+      case PowerUpType.hint:
+        return _hintRemovedOptionIndex == -1 && q.options.length > 2;
+      case PowerUpType.autoSolve:
+        return true;
+    }
+  }
+
+  // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   void startGame(GameMode mode) {
     _mode = mode;
@@ -107,124 +133,184 @@ class GameProvider extends ChangeNotifier {
     _startCountdown();
   }
 
+  void _fillInventory() {
+    for (final type in PowerUpType.values) {
+      _powerUpInventory[type] = type == PowerUpType.autoSolve
+          ? GameConstants.autoSolvePerGame
+          : GameConstants.powerUpsPerGame;
+    }
+  }
+
+  void _cancelTimers() {
+    _ticker?.cancel();
+    _countdownTimer?.cancel();
+    _advanceTimer?.cancel();
+    _ticker = null;
+    _countdownTimer = null;
+    _advanceTimer = null;
+  }
+
   void _reset() {
+    _cancelTimers();
     _score = 0;
     _combo = 0;
     _maxCombo = 0;
     _correctAnswers = 0;
     _wrongAnswers = 0;
     _questionsAnswered = 0;
+    _elapsedSeconds = 0;
     _difficulty = Difficulty.easy;
+    _currentQuestion = null;
     _lastAnswerState = AnswerState.none;
     _selectedOptionIndex = -1;
-    _isTimeFrozen = false;
-    _isDoubleScore = false;
-    _isSlowMotion = false;
+    _freezeLeft = 0;
+    _doubleLeft = 0;
+    _slowLeft = 0;
+    _slowSkip = false;
     _hintRemovedOptionIndex = -1;
     _transitioning = false;
-
+    _pendingAdvance = false;
     _livesRemaining = GameConstants.maxMistakesEndless;
-    _timeRemaining = (_mode == GameMode.classic || _mode == GameMode.rush)
-        ? GameConstants.classicDuration
-        : 0;
-
-    _powerUpInventory.updateAll((_, __) => 3);
-    _powerUpInventory[PowerUpType.autoSolve] = 2;
-
-    _gameTimer?.cancel();
-    _countdownTimer?.cancel();
+    _timeRemaining =
+        _mode.hasCountdown ? GameConstants.classicDuration : 0;
+    _fillInventory();
   }
 
   void _startCountdown() {
     _countdownValue = 3;
     _status = GameStatus.countdown;
-    notifyListeners();
+    _notify();
 
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (t) {
       _countdownValue--;
       if (_countdownValue <= 0) {
         t.cancel();
         _beginPlaying();
+      } else {
+        _notify();
       }
-      notifyListeners();
     });
   }
 
   void _beginPlaying() {
     _status = GameStatus.playing;
     _generateNextQuestion();
-    if (_mode != GameMode.zen) _startTimer();
-    notifyListeners();
+    _ticker?.cancel();
+    _ticker = Timer.periodic(const Duration(seconds: 1), _onTick);
+    _notify();
   }
 
-  void _startTimer() {
-    _gameTimer?.cancel();
-    final msInterval = _isSlowMotion ? 2000 : 1000;
-    _gameTimer = Timer.periodic(Duration(milliseconds: msInterval), (t) {
-      if (_status != GameStatus.playing || _isTimeFrozen) return;
-      _timeRemaining--;
-      if (_timeRemaining <= 0) {
-        t.cancel();
-        _endGame();
+  /// One tick per second of play time. Only classic and rush have a clock to
+  /// run down; every other mode just counts elapsed time.
+  void _onTick(Timer t) {
+    if (_status != GameStatus.playing) return;
+    _elapsedSeconds++;
+
+    final frozen = _freezeLeft > 0;
+    final slowed = _slowLeft > 0;
+    if (frozen) _freezeLeft--;
+    if (slowed) _slowLeft--;
+    if (_doubleLeft > 0) _doubleLeft--;
+
+    if (_mode.hasCountdown && !frozen) {
+      bool drain = true;
+      if (slowed) {
+        // Slow motion: the clock only drains on every other second.
+        _slowSkip = !_slowSkip;
+        if (_slowSkip) drain = false;
       }
-      notifyListeners();
-    });
+      if (drain) _timeRemaining--;
+      if (_timeRemaining <= 0) {
+        _timeRemaining = 0;
+        _endGame();
+        return;
+      }
+    }
+
+    if (_mode == GameMode.rush &&
+        _elapsedSeconds % GameConstants.rushSpeedInterval == 0) {
+      _raiseDifficulty();
+    }
+    _notify();
   }
 
   void _generateNextQuestion() {
     _hintRemovedOptionIndex = -1;
     _selectedOptionIndex = -1;
     _lastAnswerState = AnswerState.none;
+
+    Question q = QuestionGenerator.generate(difficulty: _difficulty);
+    // Avoid showing the exact same question twice in a row.
+    for (int i = 0;
+        i < 5 &&
+            _currentQuestion != null &&
+            q.questionText == _currentQuestion!.questionText;
+        i++) {
+      q = QuestionGenerator.generate(difficulty: _difficulty);
+    }
+    _currentQuestion = q;
     _questionStartTime = DateTime.now();
-    _currentQuestion =
-        QuestionGenerator.generate(difficulty: _difficulty);
-    notifyListeners();
+    _notify();
   }
 
-  // ── Answer Submission ────────────────────────────────────────────────────────
+  // ── Answers ─────────────────────────────────────────────────────────────────
 
-  void submitAnswer(int optionIndex) {
-    if (_status != GameStatus.playing ||
-        _currentQuestion == null ||
-        _transitioning) return;
+  void submitAnswer(int optionIndex, {bool auto = false}) {
+    final q = _currentQuestion;
+    if (_status != GameStatus.playing || q == null || _transitioning) return;
+    if (optionIndex < 0 || optionIndex >= q.options.length) return;
+    if (optionIndex == _hintRemovedOptionIndex) return;
 
-    final isCorrect =
-        _currentQuestion!.options[optionIndex] ==
-        _currentQuestion!.correctAnswer;
-    final elapsed =
-        DateTime.now().difference(_questionStartTime!).inMilliseconds / 1000.0;
+    final isCorrect = q.options[optionIndex] == q.correctAnswer;
+    final elapsed = _questionStartTime == null
+        ? 99.0
+        : DateTime.now().difference(_questionStartTime!).inMilliseconds /
+            1000.0;
 
     _selectedOptionIndex = optionIndex;
     _lastAnswerState = isCorrect ? AnswerState.correct : AnswerState.wrong;
     _transitioning = true;
+    _questionsAnswered++;
 
     if (isCorrect) {
-      _handleCorrect(elapsed);
+      _handleCorrect(auto ? 99.0 : elapsed);
     } else {
       _handleWrong();
     }
+    _notify();
 
-    notifyListeners();
+    // Brief pause so the player sees the feedback, then move on.
+    _advanceTimer?.cancel();
+    _advanceTimer = Timer(
+      const Duration(milliseconds: GameConstants.answerFeedbackMs),
+      _advance,
+    );
+  }
 
-    // Brief delay so player sees the feedback, then advance
-    Future.delayed(const Duration(milliseconds: 380), () {
-      if (_status != GameStatus.playing) return;
-      _questionsAnswered++;
-      _adaptDifficulty();
+  void _advance() {
+    if (_status == GameStatus.paused) {
+      // Paused during the feedback pause: finish the move when resumed.
+      _pendingAdvance = true;
+      return;
+    }
+    if (_status != GameStatus.playing) return;
+    _pendingAdvance = false;
 
-      if (_mode == GameMode.timeAttack &&
-          _questionsAnswered >= GameConstants.timeAttackQuestions) {
-        _endGame();
-        return;
-      }
-      if (_mode == GameMode.endless && _livesRemaining <= 0) {
-        _endGame();
-        return;
-      }
+    if (_mode == GameMode.timeAttack &&
+        _questionsAnswered >= GameConstants.timeAttackQuestions) {
+      _endGame();
+      return;
+    }
+    if (_mode == GameMode.endless && _livesRemaining <= 0) {
+      _endGame();
+      return;
+    }
 
-      _transitioning = false;
-      _generateNextQuestion();
-    });
+    if (_mode != GameMode.rush && _questionsAnswered % 10 == 0) {
+      _raiseDifficulty();
+    }
+    _transitioning = false;
+    _generateNextQuestion();
   }
 
   void _handleCorrect(double elapsed) {
@@ -233,185 +319,135 @@ class GameProvider extends ChangeNotifier {
     if (_combo > _maxCombo) _maxCombo = _combo;
 
     int points = GameConstants.baseScore;
-    // Streak bonus
     if (_combo > 1) {
       points += GameConstants.streakBonus * min(_combo - 1, 5);
     }
-    // Speed bonus (answer in < 2s)
-    if (elapsed < 2.0) {
-      points += (GameConstants.baseScore * 0.5).round();
-    }
-    // Double score power-up
-    if (_isDoubleScore) points *= 2;
-    // Combo multiplier
+    if (elapsed < 2.0) points += GameConstants.speedBonus;
+    if (_doubleLeft > 0) points *= 2;
     points *= comboMultiplier;
-
     _score += points;
 
-    // Streak time bonus in classic mode
-    if ((_mode == GameMode.classic || _mode == GameMode.rush) &&
-        _combo > 0 &&
-        _combo % 5 == 0) {
-      _timeRemaining += 3;
+    // Every 5th correct answer in a row buys a little extra time.
+    if (_mode.hasCountdown && _combo % 5 == 0) {
+      _timeRemaining += GameConstants.comboTimeBonus;
     }
   }
 
   void _handleWrong() {
     _combo = 0;
+    _wrongAnswers++;
     _score = max(0, _score + GameConstants.wrongPenalty);
     if (_mode == GameMode.endless) _livesRemaining--;
   }
 
-  void _adaptDifficulty() {
-    if (_questionsAnswered > 0 && _questionsAnswered % 10 == 0) {
-      switch (_difficulty) {
-        case Difficulty.easy:
-          _difficulty = Difficulty.medium;
-          break;
-        case Difficulty.medium:
-          _difficulty = Difficulty.hard;
-          break;
-        case Difficulty.hard:
-          _difficulty = Difficulty.extreme;
-          break;
-        case Difficulty.extreme:
-          break;
-      }
+  void _raiseDifficulty() {
+    switch (_difficulty) {
+      case Difficulty.easy:
+        _difficulty = Difficulty.medium;
+        break;
+      case Difficulty.medium:
+        _difficulty = Difficulty.hard;
+        break;
+      case Difficulty.hard:
+        _difficulty = Difficulty.extreme;
+        break;
+      case Difficulty.extreme:
+        break;
     }
   }
 
-  // ── Power-Ups ────────────────────────────────────────────────────────────────
+  // ── Power-ups ───────────────────────────────────────────────────────────────
 
   void activatePowerUp(PowerUpType type) {
-    if (_status != GameStatus.playing) return;
-    final count = _powerUpInventory[type] ?? 0;
-    if (count <= 0) return;
-
-    _powerUpInventory[type] = count - 1;
+    if (!canUsePowerUp(type)) return;
+    final q = _currentQuestion!;
+    _powerUpInventory[type] = (_powerUpInventory[type] ?? 0) - 1;
 
     switch (type) {
       case PowerUpType.timeFreeze:
-        _isTimeFrozen = true;
-        Future.delayed(Duration(seconds: GameConstants.timeFreezeSeconds), () {
-          _isTimeFrozen = false;
-          notifyListeners();
-        });
+        _freezeLeft = GameConstants.timeFreezeSeconds;
         break;
-
       case PowerUpType.doubleScore:
-        _isDoubleScore = true;
-        Future.delayed(Duration(seconds: GameConstants.doubleScoreSeconds), () {
-          _isDoubleScore = false;
-          notifyListeners();
-        });
+        _doubleLeft = GameConstants.doubleScoreSeconds;
         break;
-
-      case PowerUpType.hint:
-        if (_currentQuestion != null) {
-          final wrongIndices = List.generate(
-            _currentQuestion!.options.length,
-            (i) => i,
-          ).where((i) =>
-              _currentQuestion!.options[i] != _currentQuestion!.correctAnswer)
-              .toList();
-          if (wrongIndices.isNotEmpty) {
-            wrongIndices.shuffle();
-            _hintRemovedOptionIndex = wrongIndices.first;
-          }
-        }
-        break;
-
-      case PowerUpType.autoSolve:
-        if (_currentQuestion != null) {
-          final correctIdx = _currentQuestion!.correctOptionIndex;
-          Future.delayed(const Duration(milliseconds: 300), () {
-            submitAnswer(correctIdx);
-          });
-        }
-        break;
-
       case PowerUpType.slowMotion:
-        _isSlowMotion = true;
-        _gameTimer?.cancel();
-        _startTimer();
-        Future.delayed(Duration(seconds: GameConstants.slowMotionSeconds), () {
-          _isSlowMotion = false;
-          _gameTimer?.cancel();
-          _startTimer();
-          notifyListeners();
-        });
+        _slowLeft = GameConstants.slowMotionSeconds;
         break;
+      case PowerUpType.hint:
+        final wrong = <int>[];
+        for (int i = 0; i < q.options.length; i++) {
+          if (q.options[i] != q.correctAnswer) wrong.add(i);
+        }
+        if (wrong.isNotEmpty) {
+          _hintRemovedOptionIndex = wrong[_rng.nextInt(wrong.length)];
+        }
+        break;
+      case PowerUpType.autoSolve:
+        submitAnswer(q.correctOptionIndex, auto: true);
+        return; // submitAnswer already notified
     }
-
-    notifyListeners();
+    _notify();
   }
 
-  // ── Pause / Resume ───────────────────────────────────────────────────────────
+  // ── Pause / resume ──────────────────────────────────────────────────────────
 
   void pauseGame() {
     if (_status != GameStatus.playing) return;
     _status = GameStatus.paused;
-    _gameTimer?.cancel();
-    notifyListeners();
+    _notify();
   }
 
   void resumeGame() {
     if (_status != GameStatus.paused) return;
     _status = GameStatus.playing;
-    if (_mode != GameMode.zen) _startTimer();
-    notifyListeners();
+    if (_pendingAdvance) _advance();
+    _notify();
   }
 
-  // ── End & Reset ──────────────────────────────────────────────────────────────
+  // ── End & reset ─────────────────────────────────────────────────────────────
+
+  /// Ends the session and goes to the result screen (used by Zen mode, which
+  /// has no natural ending).
+  void finishGame() {
+    if (_status == GameStatus.playing || _status == GameStatus.paused) {
+      _endGame();
+    }
+  }
 
   void _endGame() {
-    _gameTimer?.cancel();
+    _cancelTimers();
     _status = GameStatus.gameOver;
-    _saveHighScore();
-    notifyListeners();
+    _notify();
   }
 
-  void resetGame() {
-    _gameTimer?.cancel();
-    _countdownTimer?.cancel();
+  /// Stops everything without notifying. Safe to call from a widget's
+  /// dispose(), so leaving the screen can never leave a game running.
+  void stopSilently() {
+    _cancelTimers();
+    _transitioning = false;
+    _pendingAdvance = false;
     _status = GameStatus.idle;
-    notifyListeners();
   }
 
   GameResult buildResult() {
-    final int coinsEarned = _score ~/ 15 + _maxCombo * 2;
-    final int xpEarned = _score ~/ 8 + _correctAnswers * 3;
     return GameResult(
       mode: _mode,
       score: _score,
       correctAnswers: _correctAnswers,
       wrongAnswers: _wrongAnswers,
       maxCombo: _maxCombo,
-      timeTakenSeconds: GameConstants.classicDuration - _timeRemaining,
-      coinsEarned: coinsEarned,
-      xpEarned: xpEarned,
-      playedAt: DateTime.now(),
+      timeTakenSeconds: _elapsedSeconds,
     );
   }
 
-  Future<void> _saveHighScore() async {
-    final prefs = await SharedPreferences.getInstance();
-    final key = '${StorageKeys.highScores}_${_mode.name}';
-    final current = prefs.getInt(key) ?? 0;
-    if (_score > current) {
-      await prefs.setInt(key, _score);
-    }
-  }
-
-  Future<int> getHighScore(GameMode mode) async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt('${StorageKeys.highScores}_${mode.name}') ?? 0;
+  void _notify() {
+    if (!_disposed) notifyListeners();
   }
 
   @override
   void dispose() {
-    _gameTimer?.cancel();
-    _countdownTimer?.cancel();
+    _disposed = true;
+    _cancelTimers();
     super.dispose();
   }
 }

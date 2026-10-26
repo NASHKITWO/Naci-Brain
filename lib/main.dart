@@ -2,44 +2,49 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'providers/game_provider.dart';
-import 'utils/app_theme.dart';
 import 'screens/splash_screen.dart';
+import 'services/storage_service.dart';
+import 'utils/app_theme.dart';
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Lock to portrait
   await SystemChrome.setPreferredOrientations([
     DeviceOrientation.portraitUp,
     DeviceOrientation.portraitDown,
   ]);
 
-  // Full immersive dark UI
   SystemChrome.setSystemUIOverlayStyle(
     const SystemUiOverlayStyle(
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: Brightness.light,
-      systemNavigationBarColor: Color(0xFF050510),
+      systemNavigationBarColor: AppColors.bg,
       systemNavigationBarIconBrightness: Brightness.light,
     ),
   );
 
-  runApp(const NaciBrainApp());
+  // Load saved data once, before the first frame, so every screen can read
+  // it synchronously.
+  final storage = await StorageService.create();
+
+  runApp(NaciBrainApp(storage: storage));
 }
 
 class NaciBrainApp extends StatelessWidget {
-  const NaciBrainApp({super.key});
+  final StorageService storage;
+  const NaciBrainApp({super.key, required this.storage});
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider(create: (_) => GameProvider()),
+        ChangeNotifierProvider<StorageService>.value(value: storage),
+        ChangeNotifierProvider<GameProvider>(create: (_) => GameProvider()),
       ],
       child: MaterialApp(
         title: 'Naci Brain',
         debugShowCheckedModeBanner: false,
-        theme: AppTheme.darkTheme,
+        theme: AppTheme.dark,
         home: const SplashScreen(),
       ),
     );

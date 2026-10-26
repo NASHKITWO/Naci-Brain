@@ -1,169 +1,97 @@
 // lib/screens/stats_screen.dart
 import 'package:flutter/material.dart';
-import 'package:flutter_animate/flutter_animate.dart';
+import 'package:provider/provider.dart';
 import '../services/storage_service.dart';
 import '../utils/app_theme.dart';
 import '../utils/constants.dart';
+import '../widgets/app_ui.dart';
 
-class StatsScreen extends StatefulWidget {
+class StatsScreen extends StatelessWidget {
   const StatsScreen({super.key});
 
   @override
-  State<StatsScreen> createState() => _StatsScreenState();
-}
-
-class _StatsScreenState extends State<StatsScreen> {
-  StorageService? _storage;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final s = await StorageService.getInstance();
-    setState(() => _storage = s);
-  }
-
-  @override
   Widget build(BuildContext context) {
+    final s = context.watch<StorageService>();
+    final accuracy = s.overallAccuracy;
+
     return Scaffold(
-      backgroundColor: AppColors.bgDark,
+      backgroundColor: AppColors.bg,
       body: SafeArea(
-        child: _storage == null
-            ? const Center(child: CircularProgressIndicator())
-            : _buildContent(),
-      ),
-    );
-  }
-
-  Widget _buildContent() {
-    final s = _storage!;
-    final scores = s.highScores;
-    final accuracy = s.totalGamesPlayed > 0
-        ? (s.totalCorrectAnswers / (s.totalGamesPlayed * 20) * 100)
-            .clamp(0, 100)
-            .toStringAsFixed(1)
-        : '—';
-
-    return CustomScrollView(
-      slivers: [
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 20, 4),
-            child: Row(
-              children: [
-                IconButton(
-                  onPressed: () => Navigator.pop(context),
-                  icon: const Icon(Icons.arrow_back_ios_new,
-                      color: AppColors.textSecondary),
-                ),
-                const Expanded(
-                  child: Text(
-                    'STATS',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: AppColors.textPrimary,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 3,
-                    ),
+        child: Column(
+          children: [
+            const ScreenHeader(title: 'Stats'),
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+                children: [
+                  _PlayerCard(storage: s),
+                  const SizedBox(height: 24),
+                  const SectionLabel('Overall'),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: StatTile(
+                          label: 'Games played',
+                          value: '${s.totalGamesPlayed}',
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: StatTile(
+                          label: 'Correct answers',
+                          value: '${s.totalCorrectAnswers}',
+                          accent: true,
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-                const SizedBox(width: 48),
-              ],
-            ),
-          ),
-        ),
-
-        // ── Player Card ──────────────────────────────────────────────
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-            child: _PlayerCard(storage: s),
-          ),
-        ),
-
-        // ── Global Stats ─────────────────────────────────────────────
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _SectionLabel('OVERALL'),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                        child: _StatBox(
-                            label: 'GAMES PLAYED',
-                            value: '${s.totalGamesPlayed}',
-                            icon: '🎮',
-                            color: AppColors.neonCyan,
-                            delay: 100)),
-                    const SizedBox(width: 10),
-                    Expanded(
-                        child: _StatBox(
-                            label: 'CORRECT',
-                            value: '${s.totalCorrectAnswers}',
-                            icon: '✓',
-                            color: AppColors.neonGreen,
-                            delay: 200)),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: StatTile(
+                          label: 'Accuracy',
+                          value: accuracy == null
+                              ? '—'
+                              : '${accuracy.toStringAsFixed(0)}%',
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: StatTile(
+                          label: 'Best combo',
+                          value: s.bestCombo == 0 ? '—' : '×${s.bestCombo}',
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: StatTile(
+                          label: 'Day streak',
+                          value: '${s.loginStreak}',
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      const Expanded(child: SizedBox()),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  const SectionLabel('High scores'),
+                  const SizedBox(height: 10),
+                  for (final mode in GameMode.values) ...[
+                    _HighScoreRow(mode: mode, score: s.getHighScore(mode)),
+                    const SizedBox(height: 8),
                   ],
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Expanded(
-                        child: _StatBox(
-                            label: 'LOGIN STREAK',
-                            value: '${s.loginStreak}d',
-                            icon: '🔥',
-                            color: AppColors.neonOrange,
-                            delay: 300)),
-                    const SizedBox(width: 10),
-                    Expanded(
-                        child: _StatBox(
-                            label: 'LEVEL',
-                            value: '${s.level}',
-                            icon: '⚡',
-                            color: AppColors.neonPurple,
-                            delay: 400)),
-                  ],
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
+          ],
         ),
-
-        // ── High Scores ──────────────────────────────────────────────
-        if (scores.isNotEmpty) ...[
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
-              child: _SectionLabel('HIGH SCORES'),
-            ),
-          ),
-          SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, i) {
-                final mode = GameMode.values[i];
-                final score = scores[mode.name] ?? 0;
-                return Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 5),
-                  child: _HighScoreRow(mode: mode, score: score, index: i),
-                );
-              },
-              childCount: GameMode.values.length,
-            ),
-          ),
-        ],
-
-        const SliverToBoxAdapter(child: SizedBox(height: 32)),
-      ],
+      ),
     );
   }
 }
@@ -174,257 +102,106 @@ class _PlayerCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final xpForNext = storage.level * 500;
-    final xpProgress = (storage.xp / xpForNext).clamp(0.0, 1.0);
-
-    return Container(
+    return AppCard(
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            AppColors.neonCyan.withOpacity(0.12),
-            AppColors.neonPurple.withOpacity(0.08),
-          ],
-        ),
-        border: Border.all(color: AppColors.neonCyan.withOpacity(0.3)),
-      ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              // Avatar
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: AppColors.neonCyan.withOpacity(0.15),
-                  border: Border.all(
-                      color: AppColors.neonCyan.withOpacity(0.5), width: 2),
-                  boxShadow: AppTheme.neonGlow(AppColors.neonCyan),
-                ),
-                child: const Center(
-                  child: Text('🧠', style: TextStyle(fontSize: 28)),
-                ),
-              ),
-              const SizedBox(width: 16),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'LEVEL ${storage.level}',
+                      'Level ${storage.level}',
                       style: const TextStyle(
-                        color: AppColors.neonCyan,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1,
+                        color: AppColors.text,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
                       ),
                     ),
+                    const SizedBox(height: 2),
                     Text(
-                      '${storage.xp} / $xpForNext XP',
+                      '${storage.xp} / ${GameConstants.xpPerLevel} XP',
                       style: const TextStyle(
-                        color: AppColors.textSecondary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
+                        color: AppColors.textDim,
+                        fontSize: 13,
                       ),
                     ),
                   ],
                 ),
               ),
-              // Coins + Gems
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  _CurrencyChip(icon: '🪙', value: '${storage.coins}',
-                      color: AppColors.neonYellow),
+                  InfoChip(
+                    icon: Icons.monetization_on_outlined,
+                    label: '${storage.coins}',
+                  ),
                   const SizedBox(height: 6),
-                  _CurrencyChip(icon: '💎', value: '${storage.gems}',
-                      color: AppColors.neonCyan),
+                  InfoChip(
+                    icon: Icons.diamond_outlined,
+                    label: '${storage.gems}',
+                  ),
                 ],
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          // XP bar
+          const SizedBox(height: 16),
           ClipRRect(
             borderRadius: BorderRadius.circular(6),
-            child: TweenAnimationBuilder<double>(
-              tween: Tween(begin: 0, end: xpProgress),
-              duration: const Duration(milliseconds: 800),
-              curve: Curves.easeOut,
-              builder: (_, v, __) => LinearProgressIndicator(
-                value: v,
-                minHeight: 8,
-                backgroundColor: AppColors.bgSurface,
-                valueColor:
-                    const AlwaysStoppedAnimation(AppColors.neonCyan),
-              ),
+            child: LinearProgressIndicator(
+              value: storage.xpProgress,
+              minHeight: 8,
+              backgroundColor: AppColors.surfaceHigh,
+              valueColor: const AlwaysStoppedAnimation<Color>(AppColors.accent),
             ),
           ),
         ],
       ),
-    ).animate().fadeIn(duration: 400.ms).slideY(begin: 0.2, end: 0);
-  }
-}
-
-class _CurrencyChip extends StatelessWidget {
-  final String icon, value;
-  final Color color;
-  const _CurrencyChip(
-      {required this.icon, required this.value, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(12),
-        color: color.withOpacity(0.12),
-        border: Border.all(color: color.withOpacity(0.4)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(icon, style: const TextStyle(fontSize: 12)),
-          const SizedBox(width: 4),
-          Text(value,
-              style: TextStyle(
-                  color: color,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w800)),
-        ],
-      ),
     );
-  }
-}
-
-class _SectionLabel extends StatelessWidget {
-  final String text;
-  const _SectionLabel(this.text);
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      text,
-      style: const TextStyle(
-        color: AppColors.textMuted,
-        fontSize: 10,
-        fontWeight: FontWeight.w700,
-        letterSpacing: 3,
-      ),
-    );
-  }
-}
-
-class _StatBox extends StatelessWidget {
-  final String label, value, icon;
-  final Color color;
-  final int delay;
-
-  const _StatBox({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.color,
-    required this.delay,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        color: AppColors.bgCard,
-        border: Border.all(color: color.withOpacity(0.25)),
-      ),
-      child: Row(
-        children: [
-          Text(icon, style: const TextStyle(fontSize: 20)),
-          const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(value,
-                  style: TextStyle(
-                      color: color,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w900)),
-              Text(label,
-                  style: const TextStyle(
-                      color: AppColors.textMuted,
-                      fontSize: 8,
-                      letterSpacing: 1.5,
-                      fontWeight: FontWeight.w600)),
-            ],
-          ),
-        ],
-      ),
-    )
-        .animate()
-        .fadeIn(delay: Duration(milliseconds: delay), duration: 300.ms)
-        .slideY(begin: 0.2, end: 0);
   }
 }
 
 class _HighScoreRow extends StatelessWidget {
   final GameMode mode;
   final int score;
-  final int index;
-
-  const _HighScoreRow(
-      {required this.mode, required this.score, required this.index});
+  const _HighScoreRow({required this.mode, required this.score});
 
   @override
   Widget build(BuildContext context) {
-    final color = mode.accentColor;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(14),
-        color: AppColors.bgCard,
-        border: Border.all(
-            color: score > 0 ? color.withOpacity(0.3) : Colors.transparent),
-      ),
+    final has = score > 0;
+    return AppCard(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
       child: Row(
         children: [
-          Text(mode.emoji, style: const TextStyle(fontSize: 20)),
+          Icon(
+            mode.icon,
+            size: 20,
+            color: has ? AppColors.accent : AppColors.textMuted,
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              mode.displayName.toUpperCase(),
+              mode.displayName,
               style: TextStyle(
-                color: score > 0 ? color : AppColors.textMuted,
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.5,
+                color: has ? AppColors.text : AppColors.textMuted,
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
           Text(
-            score > 0 ? '$score' : '—',
+            has ? '$score' : '—',
             style: TextStyle(
-              color: score > 0 ? color : AppColors.textMuted,
-              fontSize: 20,
-              fontWeight: FontWeight.w900,
+              color: has ? AppColors.text : AppColors.textMuted,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(width: 4),
-          if (score > 0)
-            Text('pts',
-                style: TextStyle(
-                    color: color.withOpacity(0.5),
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600)),
         ],
       ),
-    )
-        .animate()
-        .fadeIn(delay: Duration(milliseconds: 100 * index), duration: 300.ms)
-        .slideX(begin: 0.2, end: 0);
+    );
   }
 }
